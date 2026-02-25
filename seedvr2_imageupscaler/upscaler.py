@@ -4,16 +4,20 @@ This node wraps the SeedVR2 VideoUpscaler with intelligent tiling for
 memory-efficient processing of large images.
 """
 
+from __future__ import annotations
+
 import time
+from typing import Any
+
 import torch
 
 from .progress import Progress
-from .image_utils import tensor_to_pil, pil_to_tensor
-from .tiling import generate_tiles
-from .stitching import process_and_stitch
+from .image_utils import ImageUtils
+from .tiling import TileUtils
+from .stitching import StitchingPipeline
 
 
-def _get_offload_device_options():
+def _get_offload_device_options() -> list[str]:
     """Build offload device options similar to upstream VideoUpscaler node."""
     devices = ["none", "cpu"]
 
@@ -26,7 +30,7 @@ def _get_offload_device_options():
     return devices
 
 
-def _debug_log(enabled: bool, message: str):
+def _debug_log(enabled: bool, message: str) -> None:
     """Emit extension-specific debug logs only when enabled."""
     if enabled:
         print(f"[SeedVR2 Tiling][debug] {message}", flush=True)
@@ -54,7 +58,7 @@ class SeedVR2ImageUpscaler:
     """Tiled upscaling node that wraps SeedVR2 for memory-efficient processing."""
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls) -> dict[str, dict[str, Any]]:
         return {
             "required": {
                 "image": ("IMAGE",),
@@ -146,16 +150,31 @@ class SeedVR2ImageUpscaler:
     FUNCTION = "upscale"
     CATEGORY = "image/upscaling"
 
-    def upscale(self, image, dit, vae, seed, resolution, tile_size,
-                mask_blur, tile_overlap, tile_upscale_resolution, tiling_strategy,
-                anti_aliasing_strength, blending_method="auto", color_correction="lab",
-                input_noise_scale=0.0, offload_device="cpu", enable_debug=False):
+    def upscale(
+        self,
+        image: torch.Tensor,
+        dit: dict[str, Any],
+        vae: dict[str, Any],
+        seed: int,
+        resolution: int,
+        tile_size: int,
+        mask_blur: int,
+        tile_overlap: int,
+        tile_upscale_resolution: int,
+        tiling_strategy: str,
+        anti_aliasing_strength: float,
+        blending_method: str = "auto",
+        color_correction: str = "lab",
+        input_noise_scale: float = 0.0,
+        offload_device: str = "cpu",
+        enable_debug: bool = False,
+    ) -> tuple[torch.Tensor]:
         try:
             start_time = time.perf_counter()
-            progress = None
+            progress: Progress | None = None
 
             # Setup
-            pil_image = tensor_to_pil(image)
+            pil_image = ImageUtils.tensor_to_pil(image)
             upscale_factor = resolution / min(pil_image.width, pil_image.height)
             output_width = int(pil_image.width * upscale_factor)
             output_height = int(pil_image.height * upscale_factor)
@@ -164,7 +183,7 @@ class SeedVR2ImageUpscaler:
             )
 
             # Generate tiles and update progress tracker with correct count
-            main_tiles = generate_tiles(pil_image, tile_size, tile_overlap, tiling_strategy)
+            main_tiles = TileUtils.generate_tiles(pil_image, tile_size, tile_overlap, tiling_strategy)
             progress = Progress(len(main_tiles), enable_debug=enable_debug)
             progress.initialize_websocket_progress()
 
@@ -181,7 +200,7 @@ class SeedVR2ImageUpscaler:
             )
 
             # Process and stitch tiles
-            output_image = process_and_stitch(
+            output_image = StitchingPipeline.process_and_stitch(
                 tiles=main_tiles,
                 width=output_width,
                 height=output_height,
@@ -205,7 +224,7 @@ class SeedVR2ImageUpscaler:
             progress.finalize_websocket_progress()
             _debug_log(enable_debug, f"Completed tiling upscale in {time.perf_counter() - start_time:.2f}s")
 
-            return (pil_to_tensor(output_image),)
+            return (ImageUtils.pil_to_tensor(output_image),)
 
         except Exception as e:
             # Ensure progress is completed even on error
@@ -221,5 +240,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SeedVR2ImageUpscaler": "SeedVR2 Image Upscaler",
-    "SeedVR2TilingUpscaler": "SeedVR2 Image Upscaler"
+    "SeedVR2TilingUpscaler": "SeedVR2 Image Upscaler",
 }

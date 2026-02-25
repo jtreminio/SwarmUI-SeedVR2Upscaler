@@ -1,23 +1,33 @@
 """Tiling utilities for dividing images into overlapping tiles."""
 
+from __future__ import annotations
 
-def calculate_efficient_tile_size(width, height):
+import numpy as np
+from PIL import Image
+
+
+def calculate_efficient_tile_size(width: int, height: int) -> tuple[int, int]:
     """Calculate GPU-efficient tile dimensions by padding to optimal sizes."""
     # Target minimum efficient size and prefer multiples of 16 for GPU optimization
     min_efficient_size = 512
-    
+
     # Round up to next multiple of 16 that's at least min_efficient_size
     efficient_width = max(min_efficient_size, ((width + 15) // 16) * 16)
     efficient_height = max(min_efficient_size, ((height + 15) // 16) * 16)
-    
+
     return efficient_width, efficient_height
 
 
-def generate_tiles(image, tile_size, tile_overlap, strategy):
+def generate_tiles(
+    image: Image.Image,
+    tile_size: int,
+    tile_overlap: int,
+    strategy: str,
+) -> list[dict[str, object]]:
     """Generate square tiles with overlap based on the specified strategy."""
     width, height = image.size
-    tiles = []
-    
+    tiles: list[dict[str, object]] = []
+
     if strategy == "Linear":
         for y in range(0, height, tile_size):
             for x in range(0, width, tile_size):
@@ -34,13 +44,19 @@ def generate_tiles(image, tile_size, tile_overlap, strategy):
     return tiles
 
 
-def get_tile_info(image, x, y, tile_size, tile_overlap):
+def get_tile_info(
+    image: Image.Image,
+    x: int,
+    y: int,
+    tile_size: int,
+    tile_overlap: int,
+) -> dict[str, object]:
     """Extract tile information and crop the tile with padding.
 
     Uses edge extension (reflection) for memory padding instead of solid color fill
     to avoid artificial edges that the AI upscaler would process as real content.
     """
-    from PIL import Image, ImageOps
+    from PIL import ImageOps
 
     width, height = image.size
 
@@ -79,7 +95,6 @@ def get_tile_info(image, x, y, tile_size, tile_overlap):
         tile = ImageOps.expand(tile, border=(0, 0, memory_pad_right, memory_pad_bottom), fill=None)
         # ImageOps.expand with fill=None uses edge pixels, but we want reflection for better results
         # Create padded tile with reflection padding manually
-        import numpy as np
         tile_array = np.array(tile.crop((0, 0, current_width, current_height)))
 
         # Create output array
@@ -148,3 +163,11 @@ def get_tile_info(image, x, y, tile_size, tile_overlap):
         "memory_padding": (0, 0, memory_pad_right, memory_pad_bottom),
         "original_tile_size": (current_width, current_height),
     }
+
+
+class TileUtils:
+    """Namespace wrapper for tiling helpers."""
+
+    calculate_efficient_tile_size = staticmethod(calculate_efficient_tile_size)
+    generate_tiles = staticmethod(generate_tiles)
+    get_tile_info = staticmethod(get_tile_info)

@@ -7,9 +7,10 @@ using the DiT and VAE configurations from the loader nodes.
 from __future__ import annotations
 
 import torch
-from typing import Any, Dict
+from typing import Any
 
-def get_upscaler_class():
+
+def get_upscaler_class() -> type[Any]:
     """Get the SeedVR2VideoUpscaler class from ComfyUI's node registry.
 
     Returns:
@@ -33,8 +34,8 @@ def get_upscaler_class():
 def execute_seedvr2(
     *,
     images: torch.Tensor,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     resolution: int,
     batch_size: int = 1,
@@ -100,3 +101,10 @@ def execute_seedvr2(
         tensor = result
 
     return tensor
+
+
+class SeedVR2Adapter:
+    """Namespace wrapper around upstream SeedVR2 node calls."""
+
+    get_upscaler_class = staticmethod(get_upscaler_class)
+    execute_seedvr2 = staticmethod(execute_seedvr2)

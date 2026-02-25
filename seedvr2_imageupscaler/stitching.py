@@ -1,13 +1,15 @@
 """Stitching algorithms for blending upscaled tiles."""
 
+from __future__ import annotations
+
 import time
+
 import torch
 import numpy as np
 from PIL import Image
 from scipy import ndimage
-from scipy.signal import convolve2d
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import cv2
@@ -16,11 +18,11 @@ except ImportError:
     HAS_OPENCV = False
     print("Warning: OpenCV not available. Bilateral filtering will use Gaussian approximation.")
 
-from .image_utils import tensor_to_pil, pil_to_tensor
-from .seedvr2_adapter import execute_seedvr2
+from .image_utils import ImageUtils
+from .seedvr2_adapter import SeedVR2Adapter
 
 
-def _debug_log(enabled: bool, message: str):
+def _debug_log(enabled: bool, message: str) -> None:
     """Emit extension-specific debug logs only when requested."""
     if enabled:
         print(f"[SeedVR2 Tiling][debug] {message}", flush=True)
@@ -39,8 +41,8 @@ def _create_base_image(
     original_image: Image.Image,
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     color_correction: str = "lab",
@@ -55,8 +57,8 @@ def _create_base_image(
         f"Creating base image at resolution={base_resolution} with offload_device={offload_device}",
     )
 
-    base_tensor = pil_to_tensor(original_image)
-    base_upscaled = execute_seedvr2(
+    base_tensor = ImageUtils.pil_to_tensor(original_image)
+    base_upscaled = SeedVR2Adapter.execute_seedvr2(
         images=base_tensor,
         dit_config=dit_config,
         vae_config=vae_config,
@@ -68,22 +70,22 @@ def _create_base_image(
         offload_device=offload_device,
         enable_debug=enable_debug,
     )
-    base_pil = tensor_to_pil(base_upscaled)
+    base_pil = ImageUtils.tensor_to_pil(base_upscaled)
     return base_pil.resize((width, height), Image.LANCZOS)
 
 
 def _batch_upscale_tiles(
-    tiles: List[Dict],
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    tiles: list[dict[str, object]],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
-    progress=None,
+    progress: Any | None = None,
     color_correction: str = "lab",
     input_noise_scale: float = 0.0,
     offload_device: str = "cpu",
     enable_debug: bool = False,
-) -> List[Image.Image]:
+) -> list[Image.Image]:
     """Batch process tiles by grouping them by size for optimal performance."""
     # Group tiles by their dimensions
     tiles_by_size = defaultdict(list)
@@ -116,7 +118,7 @@ def _batch_upscale_tiles(
             sub_batch = tile_group[processed_tiles:processed_tiles + batch_size]
 
             # Collect tensors for this sub-batch
-            tile_tensors = [pil_to_tensor(tile_info["tile"]) for _, tile_info in sub_batch]
+            tile_tensors = [ImageUtils.pil_to_tensor(tile_info["tile"]) for _, tile_info in sub_batch]
             batch_tensor = torch.cat(tile_tensors, dim=0)
 
             # Update progress before processing
@@ -124,7 +126,7 @@ def _batch_upscale_tiles(
                 progress.update_sub_progress(f"AI Upscaling ({tiles_processed_count + 1}/{len(tiles)})", 1)
 
             # Process this sub-batch
-            upscaled_batch = execute_seedvr2(
+            upscaled_batch = SeedVR2Adapter.execute_seedvr2(
                 images=batch_tensor,
                 dit_config=dit_config,
                 vae_config=vae_config,
@@ -139,7 +141,7 @@ def _batch_upscale_tiles(
 
             # Store results back in original order
             for batch_idx, (original_idx, _) in enumerate(sub_batch):
-                upscaled_tiles[original_idx] = tensor_to_pil(upscaled_batch[batch_idx:batch_idx+1])
+                upscaled_tiles[original_idx] = ImageUtils.tensor_to_pil(upscaled_batch[batch_idx:batch_idx+1])
                 tiles_processed_count += 1
                 # Update progress after each tile
                 if progress:
@@ -150,7 +152,11 @@ def _batch_upscale_tiles(
     return upscaled_tiles
 
 
-def _prepare_tile_for_stitching(tile_info: Dict, ai_upscaled_tile: Image.Image, upscale_factor: float) -> Dict:
+def _prepare_tile_for_stitching(
+    tile_info: dict[str, object],
+    ai_upscaled_tile: Image.Image,
+    upscale_factor: float,
+) -> dict[str, object]:
     """Prepare an upscaled tile for stitching by resizing, positioning, and cropping.
 
     This function handles both regular overlap padding (for blending adjacent tiles)
@@ -230,7 +236,7 @@ def _prepare_tile_for_stitching(tile_info: Dict, ai_upscaled_tile: Image.Image, 
     }
 
 
-def _build_laplacian_pyramid(image: np.ndarray, levels: int = 4) -> List[np.ndarray]:
+def _build_laplacian_pyramid(image: np.ndarray, levels: int = 4) -> list[np.ndarray]:
     """Build a Laplacian pyramid for multi-band blending.
 
     Args:
@@ -266,7 +272,7 @@ def _build_laplacian_pyramid(image: np.ndarray, levels: int = 4) -> List[np.ndar
     return laplacian_pyramid
 
 
-def _collapse_laplacian_pyramid(laplacian_pyramid: List[np.ndarray]) -> np.ndarray:
+def _collapse_laplacian_pyramid(laplacian_pyramid: list[np.ndarray]) -> np.ndarray:
     """Collapse a Laplacian pyramid back to an image.
 
     Args:
@@ -292,7 +298,12 @@ def _collapse_laplacian_pyramid(laplacian_pyramid: List[np.ndarray]) -> np.ndarr
     return image
 
 
-def _apply_bilateral_filter(image, d: int = 9, sigma_color: float = 75, sigma_space: float = 75) -> np.ndarray:
+def _apply_bilateral_filter(
+    image: Image.Image | np.ndarray,
+    d: int = 9,
+    sigma_color: float = 75,
+    sigma_space: float = 75,
+) -> np.ndarray:
     """Apply bilateral filtering for edge-preserving smoothing.
 
     Args:
@@ -339,7 +350,7 @@ def _apply_bilateral_filter(image, d: int = 9, sigma_color: float = 75, sigma_sp
     return filtered
 
 
-def _compute_structure_tensor(image: np.ndarray, sigma: float = 1.5):
+def _compute_structure_tensor(image: np.ndarray, sigma: float = 1.5) -> tuple[np.ndarray, np.ndarray]:
     """Compute structure tensor for content-aware blending.
 
     Args:
@@ -391,11 +402,11 @@ def _compute_structure_tensor(image: np.ndarray, sigma: float = 1.5):
 
 
 def process_and_stitch(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -528,11 +539,11 @@ def _apply_edge_aware_antialiasing(image: Image.Image, strength: float) -> Image
 
 
 def _process_and_stitch_multiband(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -652,11 +663,11 @@ def _process_and_stitch_multiband(
 
 
 def _process_and_stitch_bilateral(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -751,11 +762,11 @@ def _process_and_stitch_bilateral(
 
 
 def _process_and_stitch_content_aware(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -859,11 +870,11 @@ def _process_and_stitch_content_aware(
 
 
 def _process_and_stitch_zero_blur(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -947,11 +958,11 @@ def _process_and_stitch_zero_blur(
 
 
 def _process_and_stitch_blended(
-    tiles: List[Dict],
+    tiles: list[dict[str, object]],
     width: int,
     height: int,
-    dit_config: Dict[str, Any],
-    vae_config: Dict[str, Any],
+    dit_config: dict[str, Any],
+    vae_config: dict[str, Any],
     seed: int,
     tile_upscale_resolution: int,
     upscale_factor: float,
@@ -1039,7 +1050,7 @@ def _create_precise_tile_mask(
     width: int,
     height: int,
     blur_radius: int,
-    padding_info: tuple,
+    padding_info: tuple[int, int, int, int],
     keep_left: int = 0,
     keep_top: int = 0,
     keep_right: int = 0,
@@ -1080,3 +1091,25 @@ def _create_precise_tile_mask(
                 mask_array[y, x] = min_alpha
 
     return Image.fromarray(mask_array)
+
+
+class StitchingPipeline:
+    """Namespace wrapper for stitching and blending helpers."""
+
+    _debug_log = staticmethod(_debug_log)
+    _get_optimal_batch_size = staticmethod(_get_optimal_batch_size)
+    _create_base_image = staticmethod(_create_base_image)
+    _batch_upscale_tiles = staticmethod(_batch_upscale_tiles)
+    _prepare_tile_for_stitching = staticmethod(_prepare_tile_for_stitching)
+    _build_laplacian_pyramid = staticmethod(_build_laplacian_pyramid)
+    _collapse_laplacian_pyramid = staticmethod(_collapse_laplacian_pyramid)
+    _apply_bilateral_filter = staticmethod(_apply_bilateral_filter)
+    _compute_structure_tensor = staticmethod(_compute_structure_tensor)
+    process_and_stitch = staticmethod(process_and_stitch)
+    _apply_edge_aware_antialiasing = staticmethod(_apply_edge_aware_antialiasing)
+    _process_and_stitch_multiband = staticmethod(_process_and_stitch_multiband)
+    _process_and_stitch_bilateral = staticmethod(_process_and_stitch_bilateral)
+    _process_and_stitch_content_aware = staticmethod(_process_and_stitch_content_aware)
+    _process_and_stitch_zero_blur = staticmethod(_process_and_stitch_zero_blur)
+    _process_and_stitch_blended = staticmethod(_process_and_stitch_blended)
+    _create_precise_tile_mask = staticmethod(_create_precise_tile_mask)

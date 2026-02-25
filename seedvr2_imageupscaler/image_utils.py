@@ -1,11 +1,13 @@
 """Image utility functions for tensor/PIL conversions."""
 
+from __future__ import annotations
+
 import torch
 import numpy as np
 from PIL import Image
 
 
-def tensor_to_pil(tensor):
+def tensor_to_pil(tensor: torch.Tensor) -> Image.Image:
     """Convert a tensor to PIL Image.
 
     Args:
@@ -19,10 +21,17 @@ def tensor_to_pil(tensor):
     if tensor.dim() == 4:
         tensor = tensor.squeeze(0)  # Remove batch dimension only: (1, H, W, C) -> (H, W, C)
     image_np = tensor.mul(255).clamp(0, 255).byte().numpy()
-    image = Image.fromarray(image_np, 'RGB')
+    image = Image.fromarray(image_np, "RGB")
     return image
 
 
-def pil_to_tensor(image):
+def pil_to_tensor(image: Image.Image) -> torch.Tensor:
     """Convert a PIL Image to tensor."""
     return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
+
+
+class ImageUtils:
+    """Namespace wrapper for image conversion helpers."""
+
+    tensor_to_pil = staticmethod(tensor_to_pil)
+    pil_to_tensor = staticmethod(pil_to_tensor)
