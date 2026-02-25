@@ -2,7 +2,7 @@
 
 import os
 from PIL import Image
-from .seedvr2_imageupscaler import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .seedvr2_image_upscaler import comfy_entrypoint, SeedVR2ImageUpscaler
 
 # Large stitched outputs can exceed Pillow's decompression-bomb threshold
 # for legitimate upscaling jobs.
@@ -26,4 +26,4 @@ def _set_max_pixels():
 
 _set_max_pixels()
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = ["comfy_entrypoint", "SeedVR2ImageUpscaler"]
