@@ -13,28 +13,28 @@ def calculate_efficient_tile_size(width, height):
     return efficient_width, efficient_height
 
 
-def generate_tiles(image, tile_width, tile_height, padding, strategy):
-    """Generate tiles based on the specified strategy."""
+def generate_tiles(image, tile_size, tile_overlap, strategy):
+    """Generate square tiles with overlap based on the specified strategy."""
     width, height = image.size
     tiles = []
     
     if strategy == "Linear":
-        for y in range(0, height, tile_height):
-            for x in range(0, width, tile_width):
-                tiles.append(get_tile_info(image, x, y, tile_width, tile_height, padding))
+        for y in range(0, height, tile_size):
+            for x in range(0, width, tile_size):
+                tiles.append(get_tile_info(image, x, y, tile_size, tile_overlap))
     elif strategy == "Chess":
-        for y_idx, y in enumerate(range(0, height, tile_height)):
-            for x_idx, x in enumerate(range(0, width, tile_width)):
+        for y_idx, y in enumerate(range(0, height, tile_size)):
+            for x_idx, x in enumerate(range(0, width, tile_size)):
                 if (x_idx + y_idx) % 2 == 0:
-                    tiles.append(get_tile_info(image, x, y, tile_width, tile_height, padding))
-        for y_idx, y in enumerate(range(0, height, tile_height)):
-            for x_idx, x in enumerate(range(0, width, tile_width)):
+                    tiles.append(get_tile_info(image, x, y, tile_size, tile_overlap))
+        for y_idx, y in enumerate(range(0, height, tile_size)):
+            for x_idx, x in enumerate(range(0, width, tile_size)):
                 if (x_idx + y_idx) % 2 != 0:
-                    tiles.append(get_tile_info(image, x, y, tile_width, tile_height, padding))
+                    tiles.append(get_tile_info(image, x, y, tile_size, tile_overlap))
     return tiles
 
 
-def get_tile_info(image, x, y, tile_width, tile_height, padding):
+def get_tile_info(image, x, y, tile_size, tile_overlap):
     """Extract tile information and crop the tile with padding.
 
     Uses edge extension (reflection) for memory padding instead of solid color fill
@@ -45,14 +45,14 @@ def get_tile_info(image, x, y, tile_width, tile_height, padding):
     width, height = image.size
 
     # Calculate actual tile boundaries (may be smaller at edges)
-    actual_tile_width = min(tile_width, width - x)
-    actual_tile_height = min(tile_height, height - y)
+    actual_tile_width = min(tile_size, width - x)
+    actual_tile_height = min(tile_size, height - y)
 
     # Calculate padding (only add padding where there are adjacent tiles)
-    left_pad = padding if x > 0 else 0
-    top_pad = padding if y > 0 else 0
-    right_pad = padding if x + tile_width < width else 0
-    bottom_pad = padding if y + tile_height < height else 0
+    left_pad = tile_overlap if x > 0 else 0
+    top_pad = tile_overlap if y > 0 else 0
+    right_pad = tile_overlap if x + tile_size < width else 0
+    bottom_pad = tile_overlap if y + tile_size < height else 0
 
     # Create the padded crop box
     padded_box = (

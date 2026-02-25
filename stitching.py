@@ -1,5 +1,6 @@
 """Stitching algorithms for blending upscaled tiles."""
 
+import time
 import torch
 import numpy as np
 from PIL import Image
@@ -17,6 +18,12 @@ except ImportError:
 
 from .image_utils import tensor_to_pil, pil_to_tensor
 from .seedvr2_adapter import execute_seedvr2
+
+
+def _debug_log(enabled: bool, message: str):
+    """Emit extension-specific debug logs only when requested."""
+    if enabled:
+        print(f"[SeedVR2 Tiling][debug] {message}", flush=True)
 
 
 def _get_optimal_batch_size(num_tiles: int) -> int:
@@ -37,17 +44,29 @@ def _create_base_image(
     seed: int,
     tile_upscale_resolution: int,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Create base image for stitching by upscaling the original at low resolution."""
+    base_resolution = min(512, tile_upscale_resolution // 2)
+    _debug_log(
+        enable_debug,
+        f"Creating base image at resolution={base_resolution} with offload_device={offload_device}",
+    )
+
     base_tensor = pil_to_tensor(original_image)
     base_upscaled = execute_seedvr2(
         images=base_tensor,
         dit_config=dit_config,
         vae_config=vae_config,
         seed=seed,
-        resolution=min(512, tile_upscale_resolution // 2),
+        resolution=base_resolution,
         batch_size=1,
         color_correction=color_correction,
+        input_noise_scale=input_noise_scale,
+        offload_device=offload_device,
+        enable_debug=enable_debug,
     )
     base_pil = tensor_to_pil(base_upscaled)
     return base_pil.resize((width, height), Image.LANCZOS)
@@ -61,6 +80,9 @@ def _batch_upscale_tiles(
     tile_upscale_resolution: int,
     progress=None,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> List[Image.Image]:
     """Batch process tiles by grouping them by size for optimal performance."""
     # Group tiles by their dimensions
@@ -76,11 +98,19 @@ def _batch_upscale_tiles(
     for tile_size, tile_group in tiles_by_size.items():
         num_tiles_in_group = len(tile_group)
         processed_tiles = 0
+        _debug_log(
+            enable_debug,
+            f"Tile group {tile_size[0]}x{tile_size[1]} count={num_tiles_in_group}",
+        )
 
         # Process this size group in optimal sub-batches
         while processed_tiles < num_tiles_in_group:
             remaining = num_tiles_in_group - processed_tiles
             batch_size = _get_optimal_batch_size(remaining)
+            _debug_log(
+                enable_debug,
+                f"Upscaling sub-batch size={batch_size} (remaining={remaining})",
+            )
 
             # Get tiles for this sub-batch
             sub_batch = tile_group[processed_tiles:processed_tiles + batch_size]
@@ -102,6 +132,9 @@ def _batch_upscale_tiles(
                 resolution=tile_upscale_resolution,
                 batch_size=batch_size,
                 color_correction=color_correction,
+                input_noise_scale=input_noise_scale,
+                offload_device=offload_device,
+                enable_debug=enable_debug,
             )
 
             # Store results back in original order
@@ -372,6 +405,9 @@ def process_and_stitch(
     anti_aliasing_strength: float = 0.0,
     blending_method: str = "auto",
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Main stitching function that chooses the appropriate method based on settings.
 
@@ -390,10 +426,15 @@ def process_and_stitch(
         anti_aliasing_strength: Anti-aliasing strength (0-1)
         blending_method: Blending method to use
         color_correction: Color correction method for SeedVR2
+        input_noise_scale: Input noise injection scale [0.0-1.0]
+        offload_device: Device to offload intermediate tensors
+        enable_debug: Enable extension-specific debug logs
 
     Returns:
         Stitched output image
     """
+    stitch_start = time.perf_counter()
+
     # Auto mode: choose based on mask_blur value
     if blending_method == "auto":
         if mask_blur == 0:
@@ -403,7 +444,15 @@ def process_and_stitch(
         else:
             blending_method = "linear"
 
-    print(f"Using {blending_method} blending method...")
+    print(f"[SeedVR2 Tiling] Using {blending_method} blending method...", flush=True)
+    _debug_log(
+        enable_debug,
+        (
+            f"Stitching setup: tiles={len(tiles)}, output={width}x{height}, "
+            f"tile_upscale_resolution={tile_upscale_resolution}, input_noise_scale={input_noise_scale:.4f}, "
+            f"offload_device={offload_device}"
+        ),
+    )
 
     # Common kwargs for all blending methods
     kwargs = {
@@ -418,6 +467,9 @@ def process_and_stitch(
         "progress": progress,
         "original_image": original_image,
         "color_correction": color_correction,
+        "input_noise_scale": input_noise_scale,
+        "offload_device": offload_device,
+        "enable_debug": enable_debug,
     }
 
     # Route to appropriate blending function
@@ -435,6 +487,8 @@ def process_and_stitch(
     # Apply anti-aliasing if requested
     if anti_aliasing_strength > 0:
         result = _apply_edge_aware_antialiasing(result, anti_aliasing_strength)
+
+    _debug_log(enable_debug, f"Stitching complete in {time.perf_counter() - stitch_start:.2f}s")
 
     return result
 
@@ -485,16 +539,38 @@ def _process_and_stitch_multiband(
     progress,
     original_image: Image.Image,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Multi-band blending using Laplacian pyramids for frequency-separated stitching."""
     # Create base image
     base_image = _create_base_image(
-        original_image, width, height, dit_config, vae_config, seed, tile_upscale_resolution, color_correction
+        original_image,
+        width,
+        height,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Batch process and upscale tiles
     upscaled_tiles = _batch_upscale_tiles(
-        tiles, dit_config, vae_config, seed, tile_upscale_resolution, progress, color_correction
+        tiles,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        progress,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Build Laplacian pyramid for base image
@@ -588,11 +664,24 @@ def _process_and_stitch_bilateral(
     progress,
     original_image: Image.Image,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Bilateral filtering-based stitching for edge-preserving blending."""
     # Create base image
     base_image = _create_base_image(
-        original_image, width, height, dit_config, vae_config, seed, tile_upscale_resolution, color_correction
+        original_image,
+        width,
+        height,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     output_image = base_image.copy()
@@ -601,7 +690,16 @@ def _process_and_stitch_bilateral(
 
     # Batch process and upscale tiles
     upscaled_tiles = _batch_upscale_tiles(
-        tiles, dit_config, vae_config, seed, tile_upscale_resolution, progress, color_correction
+        tiles,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        progress,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Process each tile
@@ -665,11 +763,24 @@ def _process_and_stitch_content_aware(
     progress,
     original_image: Image.Image,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Content-aware stitching using structure tensor for adaptive blending."""
     # Create base image
     base_image = _create_base_image(
-        original_image, width, height, dit_config, vae_config, seed, tile_upscale_resolution, color_correction
+        original_image,
+        width,
+        height,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     output_array = np.array(base_image, dtype=np.float64)
@@ -680,7 +791,16 @@ def _process_and_stitch_content_aware(
 
     # Batch process and upscale tiles
     upscaled_tiles = _batch_upscale_tiles(
-        tiles, dit_config, vae_config, seed, tile_upscale_resolution, progress, color_correction
+        tiles,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        progress,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Process each tile
@@ -750,11 +870,24 @@ def _process_and_stitch_zero_blur(
     progress,
     original_image: Image.Image,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Zero-blur stitching that preserves maximum detail through precise pixel averaging."""
     # Create base image
     base_image = _create_base_image(
-        original_image, width, height, dit_config, vae_config, seed, tile_upscale_resolution, color_correction
+        original_image,
+        width,
+        height,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     output_array = np.array(base_image, dtype=np.float64)
@@ -762,7 +895,16 @@ def _process_and_stitch_zero_blur(
 
     # Batch process and upscale tiles
     upscaled_tiles = _batch_upscale_tiles(
-        tiles, dit_config, vae_config, seed, tile_upscale_resolution, progress, color_correction
+        tiles,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        progress,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Process each upscaled tile for stitching
@@ -817,18 +959,40 @@ def _process_and_stitch_blended(
     progress,
     original_image: Image.Image,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> Image.Image:
     """Standard blended stitching with user-controlled blur."""
     # Create base image
     base_image = _create_base_image(
-        original_image, width, height, dit_config, vae_config, seed, tile_upscale_resolution, color_correction
+        original_image,
+        width,
+        height,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     output_image = base_image.copy()
 
     # Batch process and upscale tiles
     upscaled_tiles = _batch_upscale_tiles(
-        tiles, dit_config, vae_config, seed, tile_upscale_resolution, progress, color_correction
+        tiles,
+        dit_config,
+        vae_config,
+        seed,
+        tile_upscale_resolution,
+        progress,
+        color_correction,
+        input_noise_scale,
+        offload_device,
+        enable_debug,
     )
 
     # Process each upscaled tile for stitching

@@ -6,12 +6,8 @@ using the DiT and VAE configurations from the loader nodes.
 
 from __future__ import annotations
 
-import logging
 import torch
-from typing import Any, Dict, Tuple
-
-logger = logging.getLogger(__name__)
-
+from typing import Any, Dict
 
 def get_upscaler_class():
     """Get the SeedVR2VideoUpscaler class from ComfyUI's node registry.
@@ -43,6 +39,9 @@ def execute_seedvr2(
     resolution: int,
     batch_size: int = 1,
     color_correction: str = "lab",
+    input_noise_scale: float = 0.0,
+    offload_device: str = "cpu",
+    enable_debug: bool = False,
 ) -> torch.Tensor:
     """Execute SeedVR2 upscaling on a batch of images.
 
@@ -54,11 +53,24 @@ def execute_seedvr2(
         resolution: Target resolution for the shortest edge
         batch_size: Number of frames to process together
         color_correction: Color correction method (lab, wavelet, wavelet_adaptive, hsv, adain, none)
+        input_noise_scale: Input noise injection scale [0.0-1.0]
+        offload_device: Device to offload intermediate tensors
+        enable_debug: Enable upstream debug logging
 
     Returns:
         Upscaled images tensor (N, H', W', C) in [0, 1] range
     """
     upscaler_cls = get_upscaler_class()
+
+    if enable_debug:
+        print(
+            (
+                "[SeedVR2 Tiling][debug] Invoking upstream SeedVR2VideoUpscaler "
+                f"(batch_size={batch_size}, resolution={resolution}, "
+                f"input_noise_scale={input_noise_scale:.4f}, offload_device={offload_device})"
+            ),
+            flush=True,
+        )
 
     # Call the SeedVR2VideoUpscaler execute method
     result = upscaler_cls.execute(
@@ -73,10 +85,10 @@ def execute_seedvr2(
         temporal_overlap=0,
         prepend_frames=0,
         color_correction=color_correction,
-        input_noise_scale=0.0,
+        input_noise_scale=input_noise_scale,
         latent_noise_scale=0.0,
-        offload_device=dit_config.get("offload_device", "none"),
-        enable_debug=False,
+        offload_device=offload_device,
+        enable_debug=enable_debug,
     )
 
     # Extract tensor from io.NodeOutput
